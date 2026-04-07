@@ -75,6 +75,15 @@ def parse_args() -> argparse.Namespace:
             "Extract each page as a separate PDF file instead of a single combined file"
         ),
     )
+    p.add_argument(
+        "--part-size",
+        type=int,
+        default=1,
+        help=(
+            "Number of pages per part when splitting (default: 1). "
+            "Only used with --split flag."
+        ),
+    )
     return p.parse_args()
 
 
@@ -85,9 +94,15 @@ def main() -> int:
     end: int | None = args.end
     output_path: Path | None = args.output
     split: bool = args.split
+    part_size: int = args.part_size
 
     if not input_path.exists():
         print(f"Input file does not exist: {input_path}", file=sys.stderr)
+        return 2
+
+    # Validate part_size
+    if part_size < 1:
+        print("Part size must be >= 1", file=sys.stderr)
         return 2
 
     # If start was provided, ensure it's valid; otherwise we'll default later
@@ -131,40 +146,64 @@ def main() -> int:
         print("End page must be >= start page", file=sys.stderr)
         return 2
 
-    # When splitting, create separate PDFs for each page
+    # When splitting, create separate PDFs for each part
     if split:
         stem = input_path.stem
         parent = input_path.parent if output_path is None else output_path.parent
 
         created_files = []
-        for pnum in range(start - 1, end):
+        total_pages_to_extract = end - start + 1
+        part_number = 1
+
+        # Process pages in chunks of part_size
+        for chunk_start in range(start - 1, end, part_size):
+            chunk_end = min(chunk_start + part_size, end)
             writer = PdfWriter()
 
-            try:
-                # pypdf uses reader.pages[pnum]
-                page = reader.pages[pnum]  # type: ignore
-                writer.add_page(page)  # type: ignore
-            except Exception:
-                # PyPDF2 older API
+            # Add pages for this part
+            for pnum in range(chunk_start, chunk_end):
                 try:
-                    page = reader.getPage(pnum)  # type: ignore
-                    writer.addPage(page)  # type: ignore
-                except Exception as exc:  # pragma: no cover
-                    print(f"Failed to extract page {pnum + 1}: {exc}", file=sys.stderr)
-                    return 2
+                    # pypdf uses reader.pages[pnum]
+                    page = reader.pages[pnum]  # type: ignore
+                    writer.add_page(page)  # type: ignore
+                except Exception:
+                    # PyPDF2 older API
+                    try:
+                        page = reader.getPage(pnum)  # type: ignore
+                        writer.addPage(page)  # type: ignore
+                    except Exception as exc:  # pragma: no cover
+                        print(
+                            f"Failed to extract page {pnum + 1}: {exc}", file=sys.stderr
+                        )
+                        return 2
 
-            # Generate output filename for this page
-            page_output = parent / f"{stem}_page_{pnum + 1}.pdf"
+            # Generate output filename for this part
+            if part_size == 1:
+                # Single page per file: use page number
+                part_output = parent / f"{stem}_page_{chunk_start + 1}.pdf"
+            else:
+                # Multiple pages per file: use part number and page range
+                part_output = (
+                    parent
+                    / f"{stem}_part_{part_number}_pages_{chunk_start + 1}-{chunk_end}.pdf"
+                )
 
             try:
-                with open(page_output, "wb") as outf:
+                with open(part_output, "wb") as outf:
                     writer.write(outf)  # type: ignore
-                created_files.append(page_output)
+                created_files.append(part_output)
             except Exception as exc:
-                print(f"Failed to write page {pnum + 1}: {exc}", file=sys.stderr)
+                print(f"Failed to write part {part_number}: {exc}", file=sys.stderr)
                 return 2
 
-        print(f"Extracted {len(created_files)} pages as separate files:")
+            part_number += 1
+
+        if part_size == 1:
+            print(f"Extracted {len(created_files)} pages as separate files:")
+        else:
+            print(
+                f"Extracted {total_pages_to_extract} pages into {len(created_files)} parts ({part_size} pages per part):"
+            )
         for file_path in created_files:
             print(f"  {file_path}")
         return 0
