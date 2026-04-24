@@ -61,6 +61,19 @@ def parse_args() -> argparse.Namespace:
         help=("End page (1-based, inclusive). Defaults to last page if omitted."),
     )
     p.add_argument(
+        "-p",
+        "--pages",
+        required=False,
+        type=int,
+        nargs="+",
+        help="List of specific page numbers to extract (1-based). Can be non-contiguous and in any order. Overrides --start and --end if provided.",
+    )
+    p.add_argument(
+        "--invert",
+        action="store_true",
+        help="Invert the page selection. Extracts all pages except the ones specified by --pages or --start/--end.",
+    )
+    p.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -92,6 +105,8 @@ def main() -> int:
     input_path: Path = args.input
     start: int | None = args.start
     end: int | None = args.end
+    pages_list: list[int] | None = args.pages
+    invert: bool = args.invert
     output_path: Path | None = args.output
     split: bool = args.split
     part_size: int = args.part_size
@@ -133,17 +148,41 @@ def main() -> int:
     if end is None:
         end = num_pages
 
-    if start < 1:
-        print("Start page must be >= 1", file=sys.stderr)
-        return 2
-    if end > num_pages:
-        print(
-            f"End page ({end}) exceeds document page count ({num_pages})",
-            file=sys.stderr,
-        )
-        return 2
-    if end < start:
-        print("End page must be >= start page", file=sys.stderr)
+    if pages_list is not None:
+        for p in pages_list:
+            if p < 1:
+                print(f"Page number {p} must be >= 1", file=sys.stderr)
+                return 2
+            if p > num_pages:
+                print(
+                    f"Page number {p} exceeds document page count ({num_pages})",
+                    file=sys.stderr,
+                )
+                return 2
+        pages_to_extract = [p - 1 for p in pages_list]
+    else:
+        if start < 1:
+            print("Start page must be >= 1", file=sys.stderr)
+            return 2
+        if end > num_pages:
+            print(
+                f"End page ({end}) exceeds document page count ({num_pages})",
+                file=sys.stderr,
+            )
+            return 2
+        if end < start:
+            print("End page must be >= start page", file=sys.stderr)
+            return 2
+        pages_to_extract = list(range(start - 1, end))
+
+    if invert:
+        # Create a list of all pages and remove the ones in pages_to_extract
+        all_pages = set(range(num_pages))
+        exclude_pages = set(pages_to_extract)
+        pages_to_extract = sorted(list(all_pages - exclude_pages))
+
+    if not pages_to_extract:
+        print("No pages to extract after applying selection criteria.", file=sys.stderr)
         return 2
 
     # When splitting, create separate PDFs for each part
@@ -152,16 +191,16 @@ def main() -> int:
         parent = input_path.parent if output_path is None else output_path.parent
 
         created_files = []
-        total_pages_to_extract = end - start + 1
+        total_pages_to_extract = len(pages_to_extract)
         part_number = 1
 
         # Process pages in chunks of part_size
-        for chunk_start in range(start - 1, end, part_size):
-            chunk_end = min(chunk_start + part_size, end)
+        for chunk_idx in range(0, total_pages_to_extract, part_size):
+            chunk_pages = pages_to_extract[chunk_idx : chunk_idx + part_size]
             writer = PdfWriter()
 
             # Add pages for this part
-            for pnum in range(chunk_start, chunk_end):
+            for pnum in chunk_pages:
                 try:
                     # pypdf uses reader.pages[pnum]
                     page = reader.pages[pnum]  # type: ignore
@@ -180,13 +219,11 @@ def main() -> int:
             # Generate output filename for this part
             if part_size == 1:
                 # Single page per file: use page number
-                part_output = parent / f"{stem}_page_{chunk_start + 1}.pdf"
+                actual_page = chunk_pages[0] + 1
+                part_output = parent / f"{stem}_page_{actual_page}.pdf"
             else:
-                # Multiple pages per file: use part number and page range
-                part_output = (
-                    parent
-                    / f"{stem}_part_{part_number}_pages_{chunk_start + 1}-{chunk_end}.pdf"
-                )
+                # Multiple pages per file: use part number
+                part_output = parent / f"{stem}_part_{part_number}.pdf"
 
             try:
                 with open(part_output, "wb") as outf:
@@ -212,12 +249,17 @@ def main() -> int:
     if output_path is None:
         stem = input_path.stem
         parent = input_path.parent
-        output_path = parent / f"{stem}_pages_{start}-{end}.pdf"
+        if invert:
+            output_path = parent / f"{stem}_inverted_pages.pdf"
+        elif pages_list is not None:
+            output_path = parent / f"{stem}_extracted_pages.pdf"
+        else:
+            output_path = parent / f"{stem}_pages_{start}-{end}.pdf"
 
     writer = PdfWriter()
 
-    # Add requested pages (convert to 0-based)
-    for pnum in range(start - 1, end):
+    # Add requested pages
+    for pnum in pages_to_extract:
         try:
             # pypdf uses reader.pages[pnum]
             page = reader.pages[pnum]  # type: ignore
@@ -244,7 +286,10 @@ def main() -> int:
         print(f"Failed to write output PDF: {exc}", file=sys.stderr)
         return 2
 
-    print(f"Wrote pages {start}-{end} to {output_path}")
+    if invert or pages_list is not None:
+        print(f"Wrote {len(pages_to_extract)} pages to {output_path}")
+    else:
+        print(f"Wrote pages {start}-{end} to {output_path}")
     return 0
 
 

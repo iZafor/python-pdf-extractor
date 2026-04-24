@@ -5,6 +5,8 @@ write the result to a new PDF.
 
 Features
 - Extract contiguous page ranges from a PDF (start and end page).
+- Extract specific non-contiguous pages in any order.
+- Invert selection to extract all pages except the ones specified.
 - Optionally split pages into separate PDF files with configurable part sizes.
 - Small, single-purpose CLI suitable for scripts and automation.
 
@@ -23,6 +25,8 @@ Options
 -i, --input     PATH   Yes        (none)         -- Path to the input PDF file
 -s, --start     INT    No         first page     -- Start page (1-based, inclusive)
 -e, --end       INT    No         last page      -- End page (1-based, inclusive)
+-p, --pages     LIST   No         (none)         -- Specific page numbers to extract (e.g. 1 4 3). Overrides start/end
+--invert        FLAG   No         False          -- Invert selection (extract all pages EXCEPT those specified)
 -o, --output    PATH   No         <input>_pages_<start>-<end>.pdf -- Output path; generated next to input if omitted
 --split         FLAG   No         False          -- Extract each page as a separate PDF file
 --part-size     INT    No         1              -- Number of pages per part when splitting (only used with --split)
@@ -34,6 +38,18 @@ Extract pages 2 through 5 from example.pdf:
 
 ```bash
 extract-pdf-pages -i example.pdf -s 2 -e 5 -o pages_2-5.pdf
+```
+
+Extract specific non-contiguous pages:
+
+```bash
+extract-pdf-pages -i example.pdf -p 1 5 3 10
+```
+
+Extract all pages EXCEPT 1, 3, and 5:
+
+```bash
+extract-pdf-pages -i example.pdf -p 1 3 5 --invert
 ```
 
 Extract pages 1 through 10 as separate PDF files (one page per file):
